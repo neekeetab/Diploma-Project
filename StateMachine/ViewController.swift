@@ -160,13 +160,14 @@ class NetworkService {
 
 class ViewModel {
     
-    struct DataSource { }
+    typealias DataSource = [Item]
     
     enum Error: Swift.Error { }
     
     enum State: StateType {
         case initial
         case isLoadingFirstPage
+        case isReloadaing(DataSource)
         case idle(DataSource)
         case isLoadingAdditionalPage(DataSource)
         case loaded(DataSource)
@@ -225,17 +226,138 @@ class ViewModel {
     
 }
 
+extension Reactive where Base: UITableView {
+    
+    // Binding target for UITableView's tableFooterView property
+    var tableFooterView: BindingTarget<UIView?> {
+        return makeBindingTarget { tableView, view in
+            tableView.tableFooterView = view
+        }
+    }
+    
+}
+
+class ViewWithActivityIndicatorInIt: UIView {
+    
+    let activityIndicatorView: UIActivityIndicatorView
+    
+    override init(frame: CGRect) {
+        activityIndicatorView = UIActivityIndicatorView(style: .gray)
+        activityIndicatorView.translatesAutoresizingMaskIntoConstraints = false
+        super.init(frame: frame)
+        self.addSubview(activityIndicatorView)
+        activityIndicatorView.startAnimating()
+        activityIndicatorView.centerXAnchor.constraint(equalTo: self.centerXAnchor).isActive = true
+        activityIndicatorView.centerYAnchor.constraint(equalTo: self.centerYAnchor).isActive = true
+    }
+    
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("not implemented")
+    }
+    
+}
+
 class ViewController: UIViewController {
 
     let viewModel = ViewModel()
     
+//    override func viewDidLoad() {
+//        super.viewDidLoad()
+//        viewModel.store.currentState
+//            .producer
+//            .take(duringLifetimeOf: self)
+//
+//    }
+    
+    @IBOutlet weak var tableView: UITableView!
+    @IBOutlet weak var initialLoadActivityIndicatorView: UIActivityIndicatorView!
+    
     override func viewDidLoad() {
         super.viewDidLoad()
-        viewModel.store.currentState
-            .producer
-            .take(duringLifetimeOf: self)
+        
+        // setup refresh control
+        let refreshControl = UIRefreshControl()
+        if #available(iOS 10.0, *) {
+            tableView.refreshControl = refreshControl
+        } else {
+            tableView.addSubview(refreshControl)
+        }
+        
+        refreshControl.reactive.isRefreshing <~ viewModel.store.currentState.producer.filterMap {
+            switch $0 {
+            case .isReloadaing(_):
+                return true
+            default:
+                return false
+            }
+        }
+        // TODO: set isEnabled, isHidden?
+//        refreshControl.reactive.refresh = CocoaAction(viewModel.stapler.refreshAction)
+        
+        // setup activity indicator at the bottom
+        let activityIndicatorHolder = ViewWithActivityIndicatorInIt(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 60))
+        let dummyViewToHideSeparatorsAtTheBottom = UIView()
+        tableView.reactive.tableFooterView <~ viewModel.store.currentState.map { state -> UIView? in
+            switch state {
+            case .isLoadingAdditionalPage(_):
+                return activityIndicatorHolder
+            default:
+                return dummyViewToHideSeparatorsAtTheBottom
+            }
+        }
+//        tableView.reactive.tableFooterView <~ viewModel.stapler.shouldShowNextPageActivityIndicator
+//            .map { $0 ? activityIndicatorHolder : dummyViewToHideSeparatorsAtTheBottom }
+        
+        // reload table view on each change in data source
+        tableView.reactive.reloadData <~ viewModel.store.currentState.signal.map { _ in () }
+        
+        // hide initialLoadActivityIndicatorView after the initial load
+        initialLoadActivityIndicatorView.reactive.isHidden <~
+            viewModel.store.currentState.producer.map {
+            switch $0 {
+            case .isLoadingFirstPage:
+                return false
+            default:
+                return true
+            }
+        }
+        
+        // start loading
+        viewModel.apply(.startLoading)
         
     }
 
 }
 
+extension ViewModel.State {
+    var dataSource: ViewModel.DataSource? {
+        switch self {
+        case .idle(let dataSource), .isLoadingAdditionalPage(let dataSource), .isReloadaing(let dataSource), .loaded(let dataSource):
+            return dataSource
+        default:
+            return nil
+        }
+    }
+}
+
+extension ViewController: UITableViewDelegate, UITableViewDataSource {
+    
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return viewModel.store.currentState.value.dataSource?.count ?? 0
+    }
+    
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell()
+        cell.textLabel?.text = viewModel.store.currentState.value.dataSource![indexPath.row].value
+        return cell
+    }
+    
+    func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        if indexPath.row == viewModel.store.currentState.value.dataSource!.count - 1 {
+            if case .idle = viewModel.store.currentState.value {
+                viewModel.apply(.loadNextPage)
+            }
+        }
+    }
+    
+}
