@@ -9,7 +9,7 @@
 import UIKit
 import ReactiveSwift
 import ReactiveCocoa
-import enum Result.NoError
+import Result
 
 /// To be conformed by your actions.
 /// - Actions are represented as structs and typically don't contain any logic.
@@ -105,55 +105,63 @@ struct Item {
     let value: String
 }
 
+enum Error: Swift.Error { }
+
 /// Mimics a real network service for demo purposes
 class NetworkService {
-    
-    enum Error: Swift.Error {
-        case some
-    }
     
     struct ItemsResponse {
         let items: [Item]
         let total: UInt
     }
     
-    static func items(offset: UInt, size: UInt) -> SignalProducer<ItemsResponse, Error> {
+    static func items(offset: UInt, size: UInt, completionBlock: @escaping (Result<ItemsResponse, Error>) -> ()) {
         
-        let lyricsToTheBestSongEver = """
-            We're no strangers to love
-            You know the rules and so do I
-            A full commitment's what I'm thinking of
-            You wouldn't get this from any other guy
-            I just wanna tell you how I'm feeling
-            Gotta make you understand
-            Never gonna give you up
-            Never gonna let you down
-            Never gonna run around and desert you
-            Never gonna make you cry
-            Never gonna say goodbye
-            Never gonna tell a lie and hurt you
-            We've known each other for so long
-            Your heart's been aching but you're too shy to say it
-            Inside we both know what's been going on
-            We know the game and we're gonna play it
-            And if you ask me how I'm feeling
-            Don't tell me you're too blind to see
-            Never gonna give you up
-            Never gonna let you down
-            Never gonna run around and desert you
-            Never gonna make you cry
-            Never gonna say goodbye
-            Never gonna…
+        let text = """
+            To be, or not to be, that is the question:
+            Whether 'tis nobler in the mind to suffer
+            The slings and arrows of outrageous fortune,
+            Or to take arms against a sea of troubles
+            And by opposing end them. To die—to sleep,
+            No more; and by a sleep to say we end
+            The heart-ache and the thousand natural shocks
+            That flesh is heir to: 'tis a consummation
+            Devoutly to be wish'd. To die, to sleep;
+            To sleep, perchance to dream—ay, there's the rub:
+            For in that sleep of death what dreams may come,
+            When we have shuffled off this mortal coil,
+            Must give us pause—there's the respect
+            That makes calamity of so long life.
+            For who would bear the whips and scorns of time,
+            Th'oppressor's wrong, the proud man's contumely,
+            The pangs of dispriz'd love, the law's delay,
+            The insolence of office, and the spurns
+            That patient merit of th'unworthy takes,
+            When he himself might his quietus make
+            With a bare bodkin? Who would fardels bear,
+            To grunt and sweat under a weary life,
+            But that the dread of something after death,
+            The undiscovere'd country, from whose bourn
+            No traveller returns, puzzles the will,
+            And makes us rather bear those ills we have
+            Than fly to others that we know not of?
+            Thus conscience does make cowards of us all,
+            And thus the native hue of resolution
+            Is sicklied o'er with the pale cast of thought,
+            And enterprises of great pitch and moment
+            With this regard their currents turn awry
+            And lose the name of action.
         """
         
-        let lines = lyricsToTheBestSongEver.split(separator: "\n")
+        let lines = text.split(separator: "\n")
         let total = UInt(lines.count)
         let items = Array(offset ..< min(offset + size, total)).map { Item(value: String(lines[Int($0)])) }
         let response = ItemsResponse(items: items, total: total)
         
-        return SignalProducer([response])
-            // add delay for demo purposes
-            .delay(0.5, on: QueueScheduler.main)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { // add delay for demo purposes
+            completionBlock(Result<ItemsResponse, Error>.success(response))
+        }
+        
     }
     
 }
@@ -162,12 +170,10 @@ class ViewModel {
     
     typealias DataSource = [Item]
     
-    enum Error: Swift.Error { }
-    
     enum State: StateType {
         case initial
         case isLoadingFirstPage
-        case isReloadaing(DataSource)
+        case isReloading(DataSource)
         case idle(DataSource)
         case isLoadingAdditionalPage(DataSource)
         case loaded(DataSource)
@@ -177,9 +183,9 @@ class ViewModel {
     enum Action: ActionType {
         case startLoading
         case loadNextPage
-        case loadedThereIsMore
-        case loaded
-        case loadingFailed
+        case loadedThereIsMore(DataSource)
+        case loaded(DataSource)
+        case loadingFailed(Error)
         case reload
     }
     
@@ -194,8 +200,98 @@ class ViewModel {
     
     static func transitionFunction2(state: State, action: Action) -> State? {
         switch (state, action) {
-        case (.initial, .startLoading):
-            return .isLoadingFirstPage
+        case (.isLoadingFirstPage, .loadingFailed(let error)):
+            return .error(error)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction3(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isLoadingFirstPage, .loadedThereIsMore(let dataSource)):
+            return .idle(dataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction4(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isLoadingFirstPage, .loaded(let dataSource)):
+            return .loaded(dataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction5(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isLoadingAdditionalPage(let previousDataSource), .loadedThereIsMore(let newDataSource)):
+            return .idle(previousDataSource + newDataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction6(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.idle(let dataSource), .loadNextPage):
+            return .isLoadingAdditionalPage(dataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction7(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isLoadingAdditionalPage(let previousDataSource), .loaded(let newDataSource)):
+            return .loaded(previousDataSource + newDataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction8(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isLoadingAdditionalPage(_), .loadingFailed(let error)):
+            return .error(error)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction9(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.idle(let dataSource), .reload):
+            return .isReloading(dataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction10(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isReloading(_), .loadedThereIsMore(let dataSource)):
+            return .idle(dataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction11(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.loaded(let dataSource), .reload):
+            return .isReloading(dataSource)
+        default:
+            return nil
+        }
+    }
+    
+    static func transitionFunction12(state: State, action: Action) -> State? {
+        switch (state, action) {
+        case (.isReloading(_), .loadingFailed(let error)):
+            return .error(error)
         default:
             return nil
         }
@@ -203,21 +299,44 @@ class ViewModel {
     
     let store = Store<State, Action>(dispatcher: Dispatcher.shared, initialState: .initial, transitionFunctionList: [
         transitionFunction1,
-        transitionFunction2])
+        transitionFunction2,
+        transitionFunction3,
+        transitionFunction4,
+        transitionFunction5,
+        transitionFunction6,
+        transitionFunction7,
+        transitionFunction8,
+        transitionFunction9,
+        transitionFunction10,
+        transitionFunction11,
+        transitionFunction12])
+    
+    private let pageSize: UInt = 5
     
     func apply(_ action: Action) {
         
         Dispatcher.shared.dispatch(action: action)
         
         switch action {
-        case .startLoading:
-            // fetch items here
-            break
-        case .loadNextPage:
-            // fetch items here
-            break
+        case .startLoading, .loadNextPage:
+            let currentNumberOfItems = UInt(store.currentState.value.dataSource?.count ?? 0)
+            NetworkService.items(offset: currentNumberOfItems, size: pageSize) { response in
+                switch response {
+                case .success(let response):
+                    Dispatcher.shared.dispatch(action: response.items.count >= response.total ? Action.loaded(response.items) : Action.loadedThereIsMore(response.items))
+                case .failure(let error):
+                    Dispatcher.shared.dispatch(action: Action.loadingFailed(error))
+                }
+            }
         case .reload:
-            break
+            NetworkService.items(offset: 0, size: pageSize) { response in
+                switch response {
+                case .success(let response):
+                    Dispatcher.shared.dispatch(action: response.items.count >= response.total ? Action.loaded(response.items) : Action.loadedThereIsMore(response.items))
+                case .failure(let error):
+                    Dispatcher.shared.dispatch(action: Action.loadingFailed(error))
+                }
+            }
         default:
             break
         }
@@ -261,14 +380,6 @@ class ViewController: UIViewController {
 
     let viewModel = ViewModel()
     
-//    override func viewDidLoad() {
-//        super.viewDidLoad()
-//        viewModel.store.currentState
-//            .producer
-//            .take(duringLifetimeOf: self)
-//
-//    }
-    
     @IBOutlet weak var tableView: UITableView!
     @IBOutlet weak var initialLoadActivityIndicatorView: UIActivityIndicatorView!
     
@@ -283,16 +394,23 @@ class ViewController: UIViewController {
             tableView.addSubview(refreshControl)
         }
         
+        // Apply state changes to refresh control
         refreshControl.reactive.isRefreshing <~ viewModel.store.currentState.producer.filterMap {
             switch $0 {
-            case .isReloadaing(_):
+            case .isReloading(_):
                 return true
             default:
                 return false
             }
         }
-        // TODO: set isEnabled, isHidden?
-//        refreshControl.reactive.refresh = CocoaAction(viewModel.stapler.refreshAction)
+        
+        // observe refresh events
+        refreshControl.reactive.controlEvents(.valueChanged)
+            .take(duringLifetimeOf: self)
+            .on(value: { [unowned self] _ in
+                self.viewModel.apply(.reload)
+            })
+            .observeCompleted { }
         
         // setup activity indicator at the bottom
         let activityIndicatorHolder = ViewWithActivityIndicatorInIt(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 60))
@@ -305,8 +423,6 @@ class ViewController: UIViewController {
                 return dummyViewToHideSeparatorsAtTheBottom
             }
         }
-//        tableView.reactive.tableFooterView <~ viewModel.stapler.shouldShowNextPageActivityIndicator
-//            .map { $0 ? activityIndicatorHolder : dummyViewToHideSeparatorsAtTheBottom }
         
         // reload table view on each change in data source
         tableView.reactive.reloadData <~ viewModel.store.currentState.signal.map { _ in () }
@@ -332,7 +448,7 @@ class ViewController: UIViewController {
 extension ViewModel.State {
     var dataSource: ViewModel.DataSource? {
         switch self {
-        case .idle(let dataSource), .isLoadingAdditionalPage(let dataSource), .isReloadaing(let dataSource), .loaded(let dataSource):
+        case .idle(let dataSource), .isLoadingAdditionalPage(let dataSource), .isReloading(let dataSource), .loaded(let dataSource):
             return dataSource
         default:
             return nil
